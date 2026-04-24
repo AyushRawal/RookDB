@@ -589,6 +589,8 @@ fn bench_in_memory_sort(ids: &[i32], pattern: DataPattern) -> BenchResult {
     }
     let pages = table_data_pages(&path);
 
+    assert_no_sort_temp_files(&db);
+
     cleanup_db(&db);
     build_result(
         "heap_to_ordered_in_memory_sort",
@@ -629,8 +631,6 @@ fn bench_external_sort(ids: &[i32], pattern: DataPattern, pool_size: usize) -> B
         assert!(extract_int(&w[0]) <= extract_int(&w[1]));
     }
     let pages = table_data_pages(&path);
-
-    assert_no_sort_temp_files(&db);
 
     cleanup_db(&db);
     build_result(
@@ -675,8 +675,6 @@ fn bench_heap_load_plus_in_memory_sort(ids: &[i32], pattern: DataPattern) -> Ben
         assert!(extract_int(&w[0]) <= extract_int(&w[1]));
     }
     let pages = table_data_pages(&path);
-
-    assert_no_sort_temp_files(&db);
 
     cleanup_db(&db);
     build_result(
@@ -723,6 +721,8 @@ fn bench_heap_load_plus_external_sort(
         assert!(extract_int(&w[0]) <= extract_int(&w[1]));
     }
     let pages = table_data_pages(&path);
+
+    assert_no_sort_temp_files(&db);
 
     cleanup_db(&db);
     build_result(
