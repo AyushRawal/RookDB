@@ -1,8 +1,24 @@
 use std::fs::File;
 use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 
-use crate::page::{PAGE_SIZE, Page, init_page};
+use crate::page::{init_page, Page, PAGE_SIZE};
 use crate::table::page_count;
+
+#[inline]
+pub fn read_page_at(file: &mut File, page: &mut Page, page_num: u32) -> io::Result<()> {
+    let offset = page_num as u64 * PAGE_SIZE as u64;
+    file.seek(SeekFrom::Start(offset))?;
+    file.read_exact(&mut page.data)?;
+    Ok(())
+}
+
+#[inline]
+pub fn write_page_at(file: &mut File, page: &Page, page_num: u32) -> io::Result<()> {
+    let offset = page_num as u64 * PAGE_SIZE as u64;
+    file.seek(SeekFrom::Start(offset))?;
+    file.write_all(&page.data)?;
+    Ok(())
+}
 
 // Create a new page on disk and return its page number
 pub fn create_page(file: &mut File) -> io::Result<u32> {
@@ -46,13 +62,7 @@ pub fn read_page(file: &mut File, page: &mut Page, page_num: u32) -> io::Result<
         ));
     }
 
-    // Seek to page offset
-    file.seek(SeekFrom::Start(offset as u64))?;
-
-    // Read full page data
-    file.read_exact(&mut page.data)?;
-
-    Ok(())
+    read_page_at(file, page, page_num)
 }
 
 // Write a page buffer to disk at the given page number
@@ -71,11 +81,5 @@ pub fn write_page(file: &mut File, page: &mut Page, page_num: u32) -> io::Result
         ));
     }
 
-    // Seek to page offset
-    file.seek(SeekFrom::Start(offset))?;
-
-    // Write page data to disk
-    file.write_all(&page.data)?;
-
-    Ok(())
+    write_page_at(file, page, page_num)
 }

@@ -6,7 +6,7 @@
 use std::fs::File;
 use std::io;
 
-use crate::disk::{read_page, write_page};
+use crate::disk::{read_page, read_page_at, write_page, write_page_at};
 use crate::ordered::ordered_file::{read_ordered_file_header, write_ordered_file_header};
 use crate::page::{init_page, Page, ITEM_ID_SIZE, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::sorting::comparator::TupleComparator;
@@ -196,8 +196,8 @@ pub fn split_page(
     // Read from last page backwards to page_num + 1, write each one position later
     let mut temp_page = Page::new();
     for p in (page_num + 1..total_pages).rev() {
-        read_page(file, &mut temp_page, p)?;
-        write_page(file, &mut temp_page, p + 1)?;
+        read_page_at(file, &mut temp_page, p)?;
+        write_page_at(file, &temp_page, p + 1)?;
     }
 
     // 6. Write the left page at original position
