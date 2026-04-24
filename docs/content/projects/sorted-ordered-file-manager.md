@@ -5,13 +5,11 @@ sidebar_position: 5
 
 # Sorted and Ordered File Manager
 
-**Team:** Ayush Rawal (2024201036), Priyanshu Sharma (2024201046)
-
 ## Overview
 
-The Sorted and Ordered File Manager adds sorting, ordered storage, range queries, and ORDER BY processing to RookDB. Prior to this component, RookDB only supported heap files where tuples are appended in insertion order with no regard for sort order. This made sorted output and range-based lookups impossible without a full table scan.
+The Sorted and Ordered File Manager provides sorting, ordered storage, range queries, and ORDER BY processing to RookDB. Prior to this component, RookDB only supported heap files where tuples are appended in insertion order with no regard for sort order. This made sorted output and range-based lookups impossible without a full table scan.
 
-This component introduces a new layer between the Buffer Manager and the Executor that provides:
+This layer sits between the Buffer Manager and the Executor and provides:
 
 - **In-memory and external merge sorting** of heap tables into ordered files
 - **Ordered file maintenance** with sorted insertion and page splitting
@@ -53,11 +51,11 @@ The sorting and ordered file layer sits between the existing Buffer Manager and 
 +-------------------+
 ```
 
-All existing layers (Page, Disk Manager, Heap Manager) are used as-is without modification. The Catalog and Buffer Manager receive minor extensions for sort metadata. The Executor gains two new functions.
+The system depends on Page, Disk Manager, and Heap Manager. The Catalog and Buffer Manager receive minor extensions for sort metadata. The Executor adds two new functions.
 
 ### Table Header Page Extension
 
-The existing table header page (page 0, 8192 bytes) uses only the first 4 bytes for page count. We extend it to store ordered file metadata:
+The existing table header page (page 0, 8192 bytes) uses only the first 4 bytes for page count. It is extended to store ordered file metadata:
 
 | Byte Range      | Field              | Type       | Description                                |
 |-----------------|--------------------|------------|--------------------------------------------|
@@ -98,17 +96,19 @@ When a sorted insertion targets a full page, a **50/50 page split** occurs:
 
 ### Deferred Insertion (Delta Store)
 
-For ordered tables, inserts can be deferred instead of doing immediate in-place sorted insertion.
+For ordered tables, inserts can be deferred instead of doing immediate in-place sorted insertion:
 
 - New tuples are first appended to an unsorted sidecar file: `database/base/{db_name}/{table_name}.delta`
-- The main ordered file (`{table_name}.dat`) stays sorted and is used as the base run
-- Merge policy is tuple-count based: merge when `delta_current_tuples >= 500`
+- The main ordered file (`{table_name}.dat`) stays sorted and serves as the base run
+- Merge is triggered when the delta sidecar reaches 500 tuples
 
-Merge workflow:
+**Merge workflow:**
 1. Read tuples from base ordered file + delta sidecar
 2. Sort merged tuples with `TupleComparator`
 3. Rewrite base ordered file in sorted order
-4. Truncate/reset the `.delta` file
+4. Truncate the `.delta` file
+
+The delta sidecar is created on first deferred insert and persists across sessions. It is only cleared after a successful merge.
 
 Files created/used in this process:
 - `database/base/{db_name}/{table_name}.dat` (base table file, persistent)
@@ -130,9 +130,11 @@ For tables that exceed available memory, a two-phase **external multi-way merge 
 - Flush output pages as they fill
 - Repeat merge passes until one run remains
 
-Temporary files are stored as `database/base/{db_name}/.sort_tmp_{table_name}_run_{N}.dat` and are cleaned up after the sort completes. These are external-sort artifacts and are different from the deferred-insertion sidecar `database/base/{db_name}/{table_name}.delta`.
+**Temporary files:** `database/base/{db_name}/.sort_tmp_{table_name}_run_{N}.dat`
 
-### Catalog Changes
+These are created during run generation and deleted after the external sort completes. They are separate from the delta sidecar file.
+
+### Catalog Extensions
 
 The catalog JSON is extended with two new optional fields on each table:
 
@@ -150,7 +152,7 @@ Heap tables have `sort_keys: null` and `file_type: "heap"` (or absent, via `#[se
 
 ## Data Structures
 
-### New Structures
+### Key Structures
 
 | Structure | File | Purpose |
 |-----------|------|---------|
@@ -179,13 +181,13 @@ pub struct TupleComparator {
 
 Precomputes byte offsets for each column (INT = 4 bytes, TEXT = 10 bytes) at construction time, enabling O(1) field extraction during comparison. Used by all sorting, insertion, and scan operations.
 
-### Modified Structures
+### Extended Catalog Types
 
-| Structure | File | Change |
-|-----------|------|--------|
-| `Table` | `catalog/types.rs` | Added `sort_keys: Option<Vec<SortKey>>`, `file_type: Option<String>` |
-| `Column` | `catalog/types.rs` | Added `#[derive(Clone)]` |
-| `BufferManager` | `buffer_manager.rs` | Added `pool_size: usize` |
+| Structure | File | Extended Field |
+|-----------|------|---------------|
+| `Table` | `catalog/types.rs` | `sort_keys: Option<Vec<SortKey>>`, `file_type: Option<String>` |
+| `Column` | `catalog/types.rs` | `#[derive(Clone)]` |
+| `BufferManager` | `buffer_manager.rs` | `pool_size: usize` |
 
 ---
 
@@ -494,24 +496,13 @@ Interpretation notes:
 - Range scans crossing page boundaries
 - External sort with very small buffer pool (4 pages)
 
----
+## Default Values and Thresholds
 
-## Implementation Progress
+- **Page Split Threshold:** When a sorted insertion targets a full page, a 50/50 split is triggered automatically.
+- **Delta Merge Threshold:** For deferred insertions, a merge is triggered when the `.delta` sidecar reaches **500 tuples**.
+- **External Sort Buffer Pool:** External sorts partition runs based on the available buffer pool size. The default microbenchmark pool size is 4 pages.
 
-| Feature | Status |
-|---------|--------|
-| TupleComparator (INT, TEXT, ASC/DESC, multi-column) | Complete |
-| In-memory sort | Complete |
-| External merge sort (run generation + k-way merge) | Complete |
-| Ordered file header (read/write/init) | Complete |
-| Sorted insertion with page splitting | Complete |
-| Ordered scan (full sequential) | Complete |
-| Range scan (binary search seek + forward scan) | Complete |
-| Executor: order_by_execute | Complete |
-| Executor: create_ordered_file_from_heap | Complete |
-| Catalog extensions (sort_keys, file_type) | Complete |
-| Buffer manager: sorted CSV loading | Complete |
-| CLI table-type menu + options 10, 12, 13 | Complete |
-| Unit tests (71 new tests) | Complete |
-| Integration tests (6 end-to-end scenarios) | Complete |
-| Temp file cleanup | Complete |
+## Cleanup Guarantees
+
+- **Delta Sidecars (`.delta`):** Created on the first deferred insert and emptied immediately after a successful merge with the base ordered file.
+- **External Sort Temporary Files (`.sort_tmp_*`):** Created exclusively during the run generation phase of an external merge sort. They are fully deleted from the filesystem as soon as the final merge pass completes.
