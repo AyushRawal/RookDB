@@ -45,6 +45,7 @@ struct BenchResult {
     operation: String,
     pattern: String,
     rows: usize,
+    micros: u128,
     millis: u128,
     rows_per_sec: f64,
     note: String,
@@ -243,6 +244,20 @@ fn table_data_pages(file_path: &str) -> u32 {
     total.saturating_sub(1)
 }
 
+fn assert_no_sort_temp_files(db_name: &str) {
+    let db_dir = format!("database/base/{}", db_name);
+    if let Ok(entries) = fs::read_dir(&db_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !name.starts_with(".sort_tmp_"),
+                "temp file {} was not cleaned up",
+                name
+            );
+        }
+    }
+}
+
 fn delta_total_pages(db_name: &str, table_name: &str) -> u32 {
     let path = format!("database/base/{}/{}.delta", db_name, table_name);
     if !Path::new(&path).exists() {
@@ -323,6 +338,7 @@ fn build_result(
         operation: operation.to_string(),
         pattern: pattern.as_str().to_string(),
         rows,
+        micros: duration.as_micros(),
         millis: duration.as_millis(),
         rows_per_sec: rows as f64 / duration.as_secs_f64().max(1e-9),
         note: note.into(),
@@ -614,17 +630,7 @@ fn bench_external_sort(ids: &[i32], pattern: DataPattern, pool_size: usize) -> B
     }
     let pages = table_data_pages(&path);
 
-    let db_dir = format!("database/base/{}", db);
-    if let Ok(entries) = fs::read_dir(&db_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            assert!(
-                !name.starts_with(".sort_tmp_"),
-                "temp file {} was not cleaned up",
-                name
-            );
-        }
-    }
+    assert_no_sort_temp_files(&db);
 
     cleanup_db(&db);
     build_result(
@@ -669,6 +675,8 @@ fn bench_heap_load_plus_in_memory_sort(ids: &[i32], pattern: DataPattern) -> Ben
         assert!(extract_int(&w[0]) <= extract_int(&w[1]));
     }
     let pages = table_data_pages(&path);
+
+    assert_no_sort_temp_files(&db);
 
     cleanup_db(&db);
     build_result(
@@ -791,21 +799,21 @@ fn bench_ordered_delta_end_to_end(ids: &[i32], pattern: DataPattern) -> BenchRes
 
 fn print_results(title: &str, results: &[BenchResult]) {
     println!("\n{}", title);
-    println!("{:-<115}", "");
+    println!("{:-<126}", "");
     println!(
-        "{:<36} {:<11} {:>8} {:>10} {:>16}  {}",
-        "operation", "pattern", "rows", "time_ms", "rows_per_sec", "note"
+        "{:<36} {:<11} {:>8} {:>10} {:>10} {:>16}  {}",
+        "operation", "pattern", "rows", "time_us", "time_ms", "rows_per_sec", "note"
     );
-    println!("{:-<115}", "");
+    println!("{:-<126}", "");
 
     for r in results {
         println!(
-            "{:<36} {:<11} {:>8} {:>10} {:>16.2}  {}",
-            r.operation, r.pattern, r.rows, r.millis, r.rows_per_sec, r.note
+            "{:<36} {:<11} {:>8} {:>10} {:>10} {:>16.2}  {}",
+            r.operation, r.pattern, r.rows, r.micros, r.millis, r.rows_per_sec, r.note
         );
     }
 
-    println!("{:-<115}\n", "");
+    println!("{:-<126}\n", "");
 }
 
 #[test]
